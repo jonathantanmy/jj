@@ -108,6 +108,7 @@ impl OpStore for SimpleOpStore {
         }
 
         let path = self.view_path(id);
+        println!("path to read {:?}", path);
         let buf = fs::read(path).map_err(|err| io_to_read_error(err, id))?;
 
         let proto = crate::protos::op_store::View::decode(&*buf).map_err(|err| DecodeError {

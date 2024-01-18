@@ -31,6 +31,7 @@ pub struct View {
 
 impl View {
     pub fn new(op_store_view: op_store::View) -> Self {
+        //println!("{}", std::backtrace::Backtrace::force_capture());
         View {
             data: op_store_view,
         }

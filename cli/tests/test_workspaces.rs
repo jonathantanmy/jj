@@ -385,6 +385,222 @@ fn test_workspaces_updated_by_other() {
 }
 
 #[test]
+fn test_workspaces_current_op_discarded_by_other() {
+    let test_env = TestEnvironment::default();
+    test_env.jj_cmd_ok(test_env.env_root(), &["init", "--git", "main"]);
+    let main_path = test_env.env_root().join("main");
+    let secondary_path = test_env.env_root().join("secondary");
+
+    std::fs::write(main_path.join("file"), "contents\n").unwrap();
+    test_env.jj_cmd_ok(&main_path, &["new"]);
+
+    test_env.jj_cmd_ok(&main_path, &["workspace", "add", "../secondary"]);
+
+    // Create an op by creating a commit in one workspace.
+    std::fs::write(main_path.join("file"), "changed in main\n").unwrap();
+    test_env.jj_cmd_ok(&main_path, &["commit", "-m", "changed in main"]);
+
+    let stdout = test_env.jj_cmd_success(
+        &main_path,
+        &[
+            "operation",
+            "log",
+            "--template",
+            "id.short(10) ++ description",
+        ],
+    );
+    insta::assert_snapshot!(stdout, @r###"
+    @  61803bbb6fcommit 337e6027f903f3616d31599d25b6a1ee9b0588f1
+    ◉  9296fa56b1snapshot working copy
+    ◉  a07b009d6eCreate initial working-copy commit in workspace secondary
+    ◉  bb9e857734add workspace 'secondary'
+    ◉  35c191ac25new empty commit
+    ◉  859801f07bsnapshot working copy
+    ◉  27143b59c6add workspace 'default'
+    ◉  0e8aee02e2initialize repo
+    ◉  0000000000
+    "###);
+    let output = std::process::Command::new("xxd")
+        .arg(main_path.join(".jj/working_copy/checkout"))
+        .output()
+        .unwrap();
+    insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @r###"
+    00000000: 1240 6180 3bbb 6f2e 3c1b d3fe 3f72 ed6e  .@a.;.o.<...?r.n
+    00000010: c032 32df 9d1a 53e2 e61a 4582 e388 e13f  .22...S...E....?
+    00000020: f7c7 184d 5535 bdbe 4b8d d7e5 a3b6 664c  ...MU5..K.....fL
+    00000030: a163 7576 faae 8127 f37e 7de2 460f 6f61  .cuv...'.~}.F.oa
+    00000040: 589c 1a07 6465 6661 756c 74              X...default
+    "###);
+    let output = std::process::Command::new("xxd")
+        .arg(secondary_path.join(".jj/working_copy/checkout"))
+        .output()
+        .unwrap();
+    insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @r###"
+    00000000: 1240 a07b 009d 6eba 3e81 7e2e ed69 0e58  .@.{..n.>.~..i.X
+    00000010: ba2f 9b3d 925a 582f 6e68 beff f9ee af59  ./.=.ZX/nh.....Y
+    00000020: 7d15 1ef4 e2ad 5c7e 4a56 61a9 bfe2 1ba4  }.....\~JVa.....
+    00000030: 917b f382 c597 f278 c5a5 812d b235 32f5  .{.....x...-.52.
+    00000040: 04dd 1a09 7365 636f 6e64 6172 79         ....secondary
+    "###);
+
+    // Abandon ops, including the one the secondary workspace is currently on.
+    test_env.jj_cmd_ok(&main_path, &["operation", "abandon", "..@-"]);
+    test_env.jj_cmd_ok(&main_path, &["util", "gc", "--expire=now"]);
+
+    let output = std::process::Command::new("xxd")
+        .arg(secondary_path.join(".jj/working_copy/checkout"))
+        .output()
+        .unwrap();
+    insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @r###"
+    00000000: 1240 a07b 009d 6eba 3e81 7e2e ed69 0e58  .@.{..n.>.~..i.X
+    00000010: ba2f 9b3d 925a 582f 6e68 beff f9ee af59  ./.=.ZX/nh.....Y
+    00000020: 7d15 1ef4 e2ad 5c7e 4a56 61a9 bfe2 1ba4  }.....\~JVa.....
+    00000030: 917b f382 c597 f278 c5a5 812d b235 32f5  .{.....x...-.52.
+    00000040: 04dd 1a09 7365 636f 6e64 6172 79         ....secondary
+    "###);
+    let output = std::process::Command::new("xxd")
+        .arg(main_path.join(".jj/repo/op_store/operations/022863b2b32b51e446f64cd0aa4fd2076909be21db40be6025936de7782d8282849a1bb0f4b2e25505fb9f7de07eca0db9347d7590088e7800501be92b82b2ba"))
+        .output()
+        .unwrap();
+    insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @r###"
+    00000000: 0a40 3bdf 165a e049 8856 098c 6e91 fcb8  .@;..Z.I.V..n...
+    00000010: edca a0ec 7618 6b4d 442c dfeb 9d47 172d  ....v.kMD,...G.-
+    00000020: 7787 9eaa 782a 8541 e8f4 8cf8 4fd7 f6fa  w...x*.A....O...
+    00000030: 7161 80e0 0c77 92f8 02ee 952e 68d9 1e88  qa...w......h...
+    00000040: b08c 1240 0000 0000 0000 0000 0000 0000  ...@............
+    00000050: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+    00000060: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+    00000070: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+    00000080: 0000 0000 1a92 010a 0a08 f0fe e387 c71c  ................
+    00000090: 10a4 0312 0a08 f0fe e387 c71c 10a4 031a  ................
+    000000a0: 2f63 6f6d 6d69 7420 3333 3765 3630 3237  /commit 337e6027
+    000000b0: 6639 3033 6633 3631 3664 3331 3539 3964  f903f3616d31599d
+    000000c0: 3235 6236 6131 6565 3962 3035 3838 6631  25b6a1ee9b0588f1
+    000000d0: 2210 686f 7374 2e65 7861 6d70 6c65 2e63  ".host.example.c
+    000000e0: 6f6d 2a0d 7465 7374 2d75 7365 726e 616d  om*.test-usernam
+    000000f0: 6532 260a 0461 7267 7312 1e6a 6a20 636f  e2&..args..jj co
+    00000100: 6d6d 6974 202d 6d20 2763 6861 6e67 6564  mmit -m 'changed
+    00000110: 2069 6e20 6d61 696e 27                    in main'
+    "###);
+    // let output = std::process::Command::new("xxd")
+    //     .arg(main_path.join(".jj/repo/op_store/views/3bdf165ae0498856098c6e91fcb8edcaa0ec76186b4d442cdfeb9d47172d77879eaa782a8541e8f48cf84fd7f6fa716180e00c7792f802ee952e68d91e88b08c"))
+    //     .output()
+    //     .unwrap();
+    // insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    // insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap(), @"");
+    let output = std::process::Command::new("tree")
+        .arg(main_path.join(".jj"))
+        .output()
+        .unwrap();
+    insta::assert_snapshot!(String::from_utf8(output.stderr).unwrap(), @"");
+    insta::assert_snapshot!(String::from_utf8(output.stdout).unwrap().lines().skip(1).collect::<Vec<_>>().join("\n"), @r###"
+    ├── repo
+    │   ├── index
+    │   │   ├── 00328fb5bf6cf8ca55f59b82a788f3b71797b7263dda09475083dd8bae49ebbc48ca81493657cf940b38a589a88221f6f2fb00acefae6de137af51ceced0e7d2
+    │   │   ├── 2e77d42f14c86a6fb7906176f02f2197f419dc26da2ac2cb6426ed7aef08ed4f15231d24313d9e598d0df338550b8d7ad4b3a40d90182644000fb2e8e34dab1f
+    │   │   ├── 4732ed168e5e3fc031ae77b02b9c483ba6098145545ca0bed67ff8aa0baae3026e6677120098fc193f6eb5c6552349c42346805961bec07fe8191f1909bfb2bf
+    │   │   ├── 6f6d01db56ec8ebea5b292bbf5bcbafead24fa2ab91504149135023160fe6393f7b7a0b43d31d5cc6b050cbc38f7b1a17330b6edd27688d1fbd7b4a5592246ee
+    │   │   ├── 9d442af5a9f19bb29730262f5e130fe759ce15fcb143e9ad3ac119c50dcd77461ad5df1b6b53d9ba69c35546e943a47639781fa073e9ba731be013ed7324a359
+    │   │   ├── e40a190e9011a7c71a08afdfb7809ccc5812ebb438e0778a37fa51f155c445d68785e8d61fdfe1ed18c00a095430d28d3ec7673eb855aa92f0531327c161039e
+    │   │   ├── ed509a02a0f14a8cf999c4d4cc23d1bdd4b8fadb3aecefbf4dc676d38aed04ef42300873360e119e8d17f065c6decef2ed3ab707c3ab625bf0ee2ed2a60df463
+    │   │   ├── fe02e9777c826ede369d77371908f636350bd6de0e66325bef07e57932ee25c7d580c8d2a09fe56377a339cd1f1cffa2141f3db61ba9fa2841bc15468824abdc
+    │   │   ├── operations
+    │   │   │   ├── 0e8aee02e24230c99d6d90d469c582a60fdb2ae8329341bbdb09f4a0beceba1ce7c84fc9ba6c7657d6d275b392b89b825502475ad2501be1ddebd4a09b07668c
+    │   │   │   ├── 27143b59c6904046f6be83ad6fe145d819944f9abbd7247ea9c57848d1d2c678ea8265598a156fe8aeef31d24d958bf6cfa0c2eb3afef40bdae2c5e98d73d0ee
+    │   │   │   ├── 35c191ac252c501abda5c080c55b6751aef5b9f618e81cf7db802d16924c98fe67ce4fd2a41a36afb443f0296b7b8ff16ca6a140e145418a0db68ee293038484
+    │   │   │   ├── 61803bbb6f2e3c1bd3fe3f72ed6ec03232df9d1a53e2e61a4582e388e13ff7c7184d5535bdbe4b8dd7e5a3b6664ca1637576faae8127f37e7de2460f6f61589c
+    │   │   │   ├── 859801f07b25feb774646b6ee44fd4876227dce47d36eeee08e42af4e3d89b719db10178aad4adef0e974ed84c767a6c83abafcaba15cd9d4c26f91e44f964f6
+    │   │   │   ├── 9296fa56b10b861f24906bed073e0f46f3a996cee69990bb95e2299f454bb68f6810348fb672c3d655ee50b360ab491824bcd9a486d581671794f1dfd77ae896
+    │   │   │   ├── a07b009d6eba3e817e2eed690e58ba2f9b3d925a582f6e68befff9eeaf597d151ef4e2ad5c7e4a5661a9bfe21ba4917bf382c597f278c5a5812db23532f504dd
+    │   │   │   └── bb9e857734b8e0bf0a19cd3a57984159e6fc492de1f4c0b32ef733eb159ff25a58b5dda5372dce0212c0f6829514a0cbdcf8fb5825c20d436b538b432bd77f19
+    │   │   └── type
+    │   ├── op_heads
+    │   │   ├── heads
+    │   │   │   └── 022863b2b32b51e446f64cd0aa4fd2076909be21db40be6025936de7782d8282849a1bb0f4b2e25505fb9f7de07eca0db9347d7590088e7800501be92b82b2ba
+    │   │   └── type
+    │   ├── op_store
+    │   │   ├── operations
+    │   │   │   └── 022863b2b32b51e446f64cd0aa4fd2076909be21db40be6025936de7782d8282849a1bb0f4b2e25505fb9f7de07eca0db9347d7590088e7800501be92b82b2ba
+    │   │   ├── type
+    │   │   └── views
+    │   │       └── 3bdf165ae0498856098c6e91fcb8edcaa0ec76186b4d442cdfeb9d47172d77879eaa782a8541e8f48cf84fd7f6fa716180e00c7792f802ee952e68d91e88b08c
+    │   ├── store
+    │   │   ├── extra
+    │   │   │   ├── 2ce3d1c11d2c308a1543dd65d0ac99f09f6e687c2f2d3b15d669f7241aeb176661b4fc21628e660026abd934ecdd269835e6b767456f5e19c55b8fd3e2b226b1
+    │   │   │   ├── 482ae5a29fbe856c7272f2071b8b0f0359ee2d89ff392b8a900643fbd0836eccd067b8bf41909e206c90d45d6e7d8b6686b93ecaee5fe1a9060d87b672101310
+    │   │   │   ├── 59f152d0edc99cb5e580c27275e88a29ee006ed591dcf85b61809568f8a86cfde5519ac074b8cf4624c7f012e2d6fff73c8598784aac3f057ed417ee35843136
+    │   │   │   ├── 5c762c3eb51053545c7fc7784d873631ad3a9375c1be219e39bb85a5980685a15cdd6ae9a3889499c167526d2f01f4321f08002bb62dc29a893a29abe69c27d9
+    │   │   │   ├── 5f9e96679c17963365a5e4110ba7e30b5cdd6c5d4233fe42336bcffadcb811d8cdc83df12494162ff28e29cd503363d2108de6a9741ed29383fd5c86885c6b60
+    │   │   │   ├── 60233991858e9e93b768cfe4907ac8ae4690afe649af3142ae830570a0bb30740714c0f28639f4f0db2b6a6e0c71fd1bcbbff315b6d819bb1438357c39c17a42
+    │   │   │   ├── 7f83a13a9458892c71c3337abfadf20000ce7555f66e625a66451071fcc6306d3a7085e5a12f6429e0d0cd8e0ac21ab6a3baeda1f34491b05372f411a4b22401
+    │   │   │   ├── 8b0fd35602df0417e49ce5838c1dd3bd33894a39c8a37d63effff6dd24fa647277571ad7870eaca3d649b4a919c69e667d1a775bb919dcf4dfff6d0dc65b329d
+    │   │   │   ├── f78c0b77845c79b8c4911d734867bc75ebdb27d6cb490de7e19eacc0676eda13969b424f55cd372958fb320cebfc493bb0127ca9b1963de9117e62c226b57598
+    │   │   │   └── heads
+    │   │   │       └── 5f9e96679c17963365a5e4110ba7e30b5cdd6c5d4233fe42336bcffadcb811d8cdc83df12494162ff28e29cd503363d2108de6a9741ed29383fd5c86885c6b60
+    │   │   ├── git
+    │   │   │   ├── config
+    │   │   │   ├── description
+    │   │   │   ├── HEAD
+    │   │   │   ├── hooks
+    │   │   │   │   ├── applypatch-msg.sample
+    │   │   │   │   ├── commit-msg.sample
+    │   │   │   │   ├── docs.url
+    │   │   │   │   ├── fsmonitor-watchman.sample
+    │   │   │   │   ├── post-update.sample
+    │   │   │   │   ├── pre-applypatch.sample
+    │   │   │   │   ├── pre-commit.sample
+    │   │   │   │   ├── pre-merge-commit.sample
+    │   │   │   │   ├── prepare-commit-msg.sample
+    │   │   │   │   ├── pre-push.sample
+    │   │   │   │   └── pre-rebase.sample
+    │   │   │   ├── info
+    │   │   │   │   ├── exclude
+    │   │   │   │   └── refs
+    │   │   │   ├── objects
+    │   │   │   │   ├── info
+    │   │   │   │   │   └── packs
+    │   │   │   │   └── pack
+    │   │   │   │       ├── pack-399427e462d2b22ec42349c8f8e5eda7c4307226.bitmap
+    │   │   │   │       ├── pack-399427e462d2b22ec42349c8f8e5eda7c4307226.idx
+    │   │   │   │       ├── pack-399427e462d2b22ec42349c8f8e5eda7c4307226.pack
+    │   │   │   │       └── pack-399427e462d2b22ec42349c8f8e5eda7c4307226.rev
+    │   │   │   ├── packed-refs
+    │   │   │   └── refs
+    │   │   │       ├── heads
+    │   │   │       ├── jj
+    │   │   │       └── tags
+    │   │   ├── git_target
+    │   │   └── type
+    │   └── submodule_store
+    │       └── type
+    └── working_copy
+        ├── checkout
+        ├── tree_state
+        └── type
+
+    24 directories, 60 files
+    "###);
+
+    // The jj_cmd_ok below is not supposed to work
+    let (stdout, stderr) = test_env.jj_cmd_ok(&secondary_path, &["st"]);
+    insta::assert_snapshot!(stdout, @r###"
+    The working copy is clean
+    Working copy : pmmvwywv 265af0cd (empty) (no description set)
+    Parent commit: qpvuntsm cf911c22 (no description set)
+    "###);
+    insta::assert_snapshot!(stderr, @"");
+
+    // let stderr = test_env.jj_cmd_failure(&secondary_path, &["st"]);
+    // insta::assert_snapshot!(stderr, @r###"
+    // TBD
+    // "###);
+}
+
+#[test]
 fn test_workspaces_update_stale_noop() {
     let test_env = TestEnvironment::default();
     test_env.jj_cmd_ok(test_env.env_root(), &["init", "--git", "main"]);

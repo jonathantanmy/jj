@@ -1319,6 +1319,7 @@ Set which revision the branch points to with `jj branch set {branch_name} -r <RE
         // Compare working-copy tree and operation with repo's, and reload as needed.
         let mut locked_ws = self.workspace.start_working_copy_mutation()?;
         let old_op_id = locked_ws.locked_wc().old_operation_id().clone();
+        println!("op id is {}", old_op_id.hex());
         let (repo, wc_commit) =
             match check_stale_working_copy(locked_ws.locked_wc(), &wc_commit, &repo)? {
                 WorkingCopyFreshness::Fresh => (repo, wc_commit),
@@ -1877,6 +1878,7 @@ pub fn check_stale_working_copy(
 ) -> Result<WorkingCopyFreshness, OpStoreError> {
     // Check if the working copy's tree matches the repo's view
     let wc_tree_id = locked_wc.old_tree_id();
+    println!("wc_commit {:?} wc_tree_id {:?}", wc_commit.tree_id(), wc_tree_id);
     if wc_commit.tree_id() == wc_tree_id {
         // The working copy isn't stale, and no need to reload the repo.
         Ok(WorkingCopyFreshness::Fresh)
