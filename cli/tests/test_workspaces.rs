@@ -385,6 +385,83 @@ fn test_workspaces_updated_by_other() {
 }
 
 #[test]
+fn test_workspaces_current_op_discarded_by_other() {
+    let test_env = TestEnvironment::default();
+    test_env.jj_cmd_ok(test_env.env_root(), &["init", "--git", "main"]);
+    let main_path = test_env.env_root().join("main");
+    let secondary_path = test_env.env_root().join("secondary");
+
+    std::fs::write(main_path.join("file"), "contents\n").unwrap();
+    test_env.jj_cmd_ok(&main_path, &["new"]);
+
+    test_env.jj_cmd_ok(&main_path, &["workspace", "add", "../secondary"]);
+
+    // Create an op by abandoning the parent commit. Importantly, that commit also
+    // changes the target tree in the secondary workspace.
+    test_env.jj_cmd_ok(&main_path, &["abandon", "@-"]);
+
+    let stdout = test_env.jj_cmd_success(
+        &main_path,
+        &[
+            "operation",
+            "log",
+            "--template",
+            r#"id.short(10) ++ " " ++ description"#,
+        ],
+    );
+    insta::assert_snapshot!(stdout, @r###"
+    @  8880ddc17d abandon commit cf911c223d3e24e001fc8264d6dbf0610804fc40
+    ◉  a07b009d6e Create initial working-copy commit in workspace secondary
+    ◉  bb9e857734 add workspace 'secondary'
+    ◉  35c191ac25 new empty commit
+    ◉  859801f07b snapshot working copy
+    ◉  27143b59c6 add workspace 'default'
+    ◉  0e8aee02e2 initialize repo
+    ◉  0000000000
+    "###);
+
+    // Abandon ops, including the one the secondary workspace is currently on.
+    test_env.jj_cmd_ok(&main_path, &["operation", "abandon", "..@-"]);
+    test_env.jj_cmd_ok(&main_path, &["util", "gc", "--expire=now"]);
+
+    let (stdout, stderr) = test_env.jj_cmd_ok(&secondary_path, &["st"]);
+    insta::assert_snapshot!(stdout, @r###"
+    Working copy changes:
+    A file
+    Working copy : pmmvwywv a23980d3 (no description set)
+    Parent commit: zzzzzzzz 00000000 (empty) (no description set)
+    "###);
+    insta::assert_snapshot!(stderr, @r###"
+    Missing operation, using operation repo was loaded at
+    "###);
+
+    // hmm...not idempotent
+    let (stdout, stderr) = test_env.jj_cmd_ok(&secondary_path, &["st"]);
+    insta::assert_snapshot!(stdout, @r###"
+    Working copy changes:
+    A file
+    Working copy : pmmvwywv a23980d3 (no description set)
+    Parent commit: zzzzzzzz 00000000 (empty) (no description set)
+    "###);
+    insta::assert_snapshot!(stderr, @"");
+
+    let (stdout, stderr) = test_env.jj_cmd_ok(&secondary_path, &["commit", "-m=message"]);
+    insta::assert_snapshot!(stdout, @"");
+    insta::assert_snapshot!(stderr, @r###"
+    Working copy now at: znkkpsqq af427e3c (empty) (no description set)
+    Parent commit      : pmmvwywv 92154c2b message
+    "###);
+
+    let (stdout, stderr) = test_env.jj_cmd_ok(&secondary_path, &["st"]);
+    insta::assert_snapshot!(stdout, @r###"
+    The working copy is clean
+    Working copy : znkkpsqq af427e3c (empty) (no description set)
+    Parent commit: pmmvwywv 92154c2b message
+    "###);
+    insta::assert_snapshot!(stderr, @"");
+}
+
+#[test]
 fn test_workspaces_update_stale_noop() {
     let test_env = TestEnvironment::default();
     test_env.jj_cmd_ok(test_env.env_root(), &["init", "--git", "main"]);

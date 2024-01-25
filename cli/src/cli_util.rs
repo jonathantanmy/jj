@@ -1323,6 +1323,13 @@ Set which revision the branch points to with `jj branch set {branch_name} -r <RE
         let (repo, wc_commit) =
             match check_stale_working_copy(locked_ws.locked_wc(), &wc_commit, &repo)? {
                 WorkingCopyFreshness::Fresh => (repo, wc_commit),
+                WorkingCopyFreshness::MissingOperation => {
+                    writeln!(
+                        ui.warning(),
+                        "Missing operation, using operation repo was loaded at"
+                    )?;
+                    (repo, wc_commit)
+                }
                 WorkingCopyFreshness::Updated(wc_operation) => {
                     let repo = repo.reload_at(&wc_operation)?;
                     let wc_commit = if let Some(wc_commit) = get_wc_commit(&repo)? {
@@ -1857,6 +1864,7 @@ pub enum WorkingCopyFreshness {
     WorkingCopyStale,
     /// The working copy is a sibling of the latest operation.
     SiblingOperation,
+    MissingOperation,
 }
 
 impl WorkingCopyFreshness {
@@ -1864,7 +1872,9 @@ impl WorkingCopyFreshness {
     /// operation.
     pub fn is_stale(&self) -> bool {
         match self {
-            WorkingCopyFreshness::Fresh | WorkingCopyFreshness::Updated(_) => false,
+            WorkingCopyFreshness::Fresh
+            | WorkingCopyFreshness::Updated(_)
+            | WorkingCopyFreshness::MissingOperation => false,
             WorkingCopyFreshness::WorkingCopyStale | WorkingCopyFreshness::SiblingOperation => true,
         }
     }
@@ -1882,9 +1892,10 @@ pub fn check_stale_working_copy(
         // The working copy isn't stale, and no need to reload the repo.
         Ok(WorkingCopyFreshness::Fresh)
     } else {
-        let wc_operation_data = repo
-            .op_store()
-            .read_operation(locked_wc.old_operation_id())?;
+        let wc_operation_data = match repo.op_store().read_operation(locked_wc.old_operation_id()) {
+            Ok(o) => o,
+            Err(_) => return Ok(WorkingCopyFreshness::MissingOperation),
+        };
         let wc_operation = Operation::new(
             repo.op_store().clone(),
             locked_wc.old_operation_id().clone(),
